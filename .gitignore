@@ -1,0 +1,13 @@
+# Flugdaten nicht auf GitHub hochladen
+data/
+*.parquet
+*.csv
+*.json
+
+# Python-Umgebung
+.venv/
+__pycache__/
+*.pyc
+
+# Lokale Einstellungen
+.env
