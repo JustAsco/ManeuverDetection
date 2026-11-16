@@ -11,3 +11,7 @@ __pycache__/
 
 # Lokale Einstellungen
 .env
+
+# Daten-Archiv und trainierte Modelle
+data.zip
+models/

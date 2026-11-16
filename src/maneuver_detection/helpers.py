@@ -22,6 +22,17 @@ def save_classifiers(classifiers: list[BaseEstimator], path: Path) -> None:
         pickle.dump(classifiers, file)
 
 
+def save_open_figures(directory: Path, prefix: str) -> None:
+    """Save all open matplotlib figures as PNG files into the directory."""
+    import matplotlib.pyplot as plt
+
+    directory.mkdir(parents=True, exist_ok=True)
+    for number in plt.get_fignums():
+        path = directory / f"{prefix}_{number}.png"
+        plt.figure(number).savefig(path, dpi=150, bbox_inches="tight")
+        print(f"Saved figure to {path}")
+
+
 def load_classifiers(path: Path) -> list[BaseEstimator]:
     """Load the list of classifiers from a file."""
     print(f"Loading classifiers from {path}")
