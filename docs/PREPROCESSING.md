@@ -8,7 +8,7 @@ The pipeline was successfully executed on all 13 training flights.
 
 Current output:
 - 9,023 training windows
-- 8 numerical features per window
+- 32 numerical features per window
 - 1 maneuver label per window
 - Separate metadata containing flight IDs and window timestamps
 
@@ -16,18 +16,19 @@ The six reserved test flights are not processed by default.
 
 ## 2. Selected signals
 
-Four signals were selected for the initial baseline:
-
 | Signal | Purpose |
 |---|---|
-| Aircraft Height [m] | Altitude and vertical flight behavior |
-| Aircraft VerticalSpeed [m/s] | Distinguishing climb, descent and hover |
-| Aircraft GroundSpeed [m/s] | Distinguishing hover from forward flight |
-| Aircraft Bank [rad] | Identifying lateral aircraft attitude during turns |
+| Aircraft Height [m] | On ground vs. hover vs. flight, vertical trend |
+| Aircraft VerticalSpeed [m/s] | Climb, descent, hover |
+| Aircraft GroundSpeed [m/s] | Hover vs. forward flight |
+| Aircraft Bank [rad] | Lateral attitude during turns |
+| Aircraft Pitch [rad] | Nose attitude (climb vs. level vs. descent) |
+| Aircraft AngularVelocity [rad/s] | Rotation rates (3D vector, expanded to `_0`, `_1`, `_2`) |
+| Aircraft TrueHeading [rad] | Turn rate (heading is unwrapped first, so 2π → 0 is not a jump) |
+| Aircraft RotorRotationSpeed [rad/s] | Rotor behaviour, especially in autorotation |
+| Instrument EngineTorqueFraction [0-1] | Engine power; drops to near zero in autorotation |
 
-These signals were selected based on their physical relevance and an initial visualization of a training flight.
-
-The selection is not optimized yet. Additional signals, especially angular velocity, pitch and rotor-related measurements, could improve maneuver classification.
+No collective lever position is recorded in the data (only throttle and rotor brake have continuous control data), so engine torque is used as a proxy for collective.
 
 ## 3. Missing values
 
@@ -57,9 +58,13 @@ The current parameters are:
 - Stride: 2.5 seconds
 - Window overlap: 50%
 
-For each selected signal, the mean and standard deviation are calculated.
+Per window the following features are computed:
 
-This results in eight features per window.
+- For most signals: mean, standard deviation and slope (change per second from first to last sample).
+- Height: slope, standard deviation, mean of `log(1 + height)` and `OnGround_Fraction` (share of samples below 0.3 m). The absolute height mean was dropped because it differs strongly between flights (median 5 m to 500 m) and encoded the flight rather than the maneuver. The on-ground fraction separates hover (about 0.5–16 m) from standing on the ground (about −0.1–0 m).
+- Heading: only the turn rate (slope of the unwrapped heading); the absolute heading carries no maneuver information.
+
+This results in 32 features per window.
 
 ### Time-weighted window labels
 
@@ -101,21 +106,30 @@ Flight IDs and timestamps are metadata and must not be used as classifier input 
 
 ## 8. Known limitations and future improvements
 
-- Only four aircraft signals are currently used.
 - The feature statistics are calculated across measurement rows, not weighted by time duration.
 - Window size and stride have not been optimized.
 - Windows containing multiple classes are assigned the longest-duration class.
 - Unannotated intervals are assumed to represent `No Maneuver`.
-- Absolute altitude may contain flight-specific information rather than purely maneuver-related information.
-- The final maneuver-detection metric, including the 80% duration threshold, still needs to be evaluated.
+- No collective lever position is available; engine torque is used as a proxy.
+- `no maneuver` has the lowest window recall (0.66 with LDA); it mixes ground time, transitions and unannotated flight.
 
 ## 9. Test results
 
 - 13/13 training flights processed successfully
 - 9,023 windows generated
 - 0 missing feature values
-- All eight classes present
+- All eight classes present (autorotation only in 7 of 13 flights)
 - Metadata aligned with feature rows
 - Window duration and chronological order checked
 
-This pipeline provides an initial reproducible baseline for model development. It is not yet an optimized maneuver detector.
+Grouped 5-fold cross-validation with LDA (`train.py`), before → after the feature update:
+
+| Metric | 8 features | 32 features |
+|---|---|---|
+| Maneuver recall | 0.44 | 0.46 |
+| Maneuver recall (excl. no maneuver) | 0.33 | 0.63 |
+| Precision | 0.57 | 0.71 |
+| Accuracy | 0.62 | 0.69 |
+| Hover window recall | 0.00 | 0.98 |
+
+This pipeline provides a reproducible baseline for model development. It is not yet an optimized maneuver detector.

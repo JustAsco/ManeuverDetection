@@ -7,6 +7,27 @@ from tqdm import tqdm
 
 from maneuver_detection.config import Config
 
+HEIGHT_COLUMN = "Aerofly_Out_Aircraft_Height"
+HEADING_COLUMN = "Aerofly_Out_Aircraft_TrueHeading"
+
+# Raw signals read from each flight
+SELECTED_COLUMNS = [
+    HEIGHT_COLUMN,
+    "Aerofly_Out_Aircraft_VerticalSpeed",
+    "Aerofly_Out_Aircraft_GroundSpeed",
+    "Aerofly_Out_Aircraft_Bank",
+    "Aerofly_Out_Aircraft_Pitch",
+    "Aerofly_Out_Aircraft_AngularVelocity",  # 3D vector, expanded to _0, _1, _2
+    HEADING_COLUMN,
+    "Aerofly_Out_Aircraft_RotorRotationSpeed",
+    # No collective lever position is recorded; engine torque is used as proxy
+    "Aerofly_Out_Instrument_EngineTorqueFraction",
+]
+
+# Height [m] below which the aircraft is considered to be on the ground.
+# On-ground windows sit at about -0.1..0 m, hover starts at about 0.5 m.
+GROUND_HEIGHT_THRESHOLD = 0.3
+
 
 class Preprocessor:
     """Preprocess raw data files into feature dataframes."""
@@ -74,6 +95,7 @@ class Preprocessor:
         df = self._fix_missing_values(df)
         df = _fix_index(df)
         df = _expand_vectors(df)
+        df = _unwrap_heading(df)
         df = self._assign_maneuver_labels(df, annotations)
 
         features, metadata = self._summarize_features_in_blocks(
@@ -166,13 +188,7 @@ class Preprocessor:
 
     
     def _extract_relevant_columns(self, df: pd.DataFrame) -> pd.DataFrame:
-        # Select relevant flight signals
-        selected_columns = [
-            "Aerofly_Out_Aircraft_Height",
-            "Aerofly_Out_Aircraft_VerticalSpeed",
-            "Aerofly_Out_Aircraft_GroundSpeed",
-            "Aerofly_Out_Aircraft_Bank"
-        ]
+        selected_columns = SELECTED_COLUMNS
 
         # Check if all columns exist
         for column in selected_columns:
@@ -312,15 +328,7 @@ class Preprocessor:
 
             if len(block) >= 2:
 
-                # Calculate statistical features
-                means = block[signal_columns].mean()
-                stds = block[signal_columns].std(ddof=0)
-
-                features = {}
-
-                for column in signal_columns:
-                    features[f"{column}_Mean"] = float(means[column])
-                    features[f"{column}_Std"] = float(stds[column])
+                features = _window_features(block[signal_columns])
 
                 # Calculate how long each maneuver occurs in the window
                 durations = {
@@ -388,6 +396,48 @@ class Preprocessor:
 
     
 
+
+
+def _window_features(block: pd.DataFrame) -> dict[str, float]:
+    """Compute the features of one window.
+
+    For most signals: mean, standard deviation and slope (change per second
+    from the first to the last sample).
+
+    Height: its absolute value differs strongly between flights (5 m to 500 m
+    median), so only its slope, its std, the mean of log(1 + height) and the
+    fraction of samples on the ground are used. The on-ground fraction
+    separates hover (a few metres) from standing on the ground (0 m).
+
+    Heading: absolute heading carries no maneuver information, so only the
+    turn rate (slope of the unwrapped heading) is used.
+    """
+    duration = (block.index[-1] - block.index[0]).total_seconds()
+    features = {}
+
+    for column in block.columns:
+        values = block[column].to_numpy(dtype=float)
+        slope = (values[-1] - values[0]) / duration if duration > 0 else 0.0
+
+        if column == HEADING_COLUMN:
+            features[f"{column}_Rate"] = float(slope)
+        elif column == HEIGHT_COLUMN:
+            features[f"{column}_LogMean"] = float(np.log1p(np.clip(values, 0, None)).mean())
+            features[f"{column}_Std"] = float(values.std())
+            features[f"{column}_Slope"] = float(slope)
+            features["OnGround_Fraction"] = float((values < GROUND_HEIGHT_THRESHOLD).mean())
+        else:
+            features[f"{column}_Mean"] = float(values.mean())
+            features[f"{column}_Std"] = float(values.std())
+            features[f"{column}_Slope"] = float(slope)
+
+    return features
+
+
+def _unwrap_heading(df: pd.DataFrame) -> pd.DataFrame:
+    # Remove the jump between 2*pi and 0 so the heading change is continuous
+    df[HEADING_COLUMN] = np.unwrap(df[HEADING_COLUMN].to_numpy(dtype=float))
+    return df
 
 
 def _fix_index(df: pd.DataFrame) -> pd.DataFrame:
